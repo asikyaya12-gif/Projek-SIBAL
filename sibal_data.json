@@ -1,0 +1,301 @@
+{
+  "transaksi_pemasukan": [
+    {
+      "tanggal": "2025-11-18",
+      "jenis": "penjualan_ikan",
+      "jumlah": 60000,
+      "quantity": 5,
+      "hpp": 10000,
+      "keterangan": "bawal",
+      "ref": "TR",
+      "tipe": "pemasukan"
+    }
+  ],
+  "transaksi_pengeluaran": [
+    {
+      "tanggal": "2025-11-18",
+      "jenis": "pembelian_persediaan",
+      "kode_barang": "IK001",
+      "jenis_aset": "",
+      "jumlah": 30000,
+      "quantity": 200,
+      "metode_bayar": "tunai",
+      "supplier": "",
+      "keterangan": "beli",
+      "ref": "tr",
+      "tipe": "pengeluaran"
+    },
+    {
+      "tanggal": "2025-11-18",
+      "jenis": "pembelian_aset",
+      "kode_barang": "",
+      "jenis_aset": "tanah",
+      "jumlah": 2100000000,
+      "quantity": 0,
+      "metode_bayar": "tunai",
+      "supplier": "",
+      "keterangan": "Pengeluaran - pembelian_aset",
+      "ref": "TR",
+      "tipe": "pengeluaran"
+    },
+    {
+      "tanggal": "2025-11-18",
+      "jenis": "pembelian_persediaan",
+      "kode_barang": "IK001",
+      "jumlah": 300000,
+      "quantity": 100,
+      "metode_bayar": "kredit",
+      "supplier": "harni",
+      "keterangan": "beli",
+      "ref": "TR",
+      "tipe": "pengeluaran"
+    }
+  ],
+  "jurnal_umum": [
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "bawal",
+      "ref": "TR",
+      "akun_debit": "Kas",
+      "jumlah_debit": 60000,
+      "akun_kredit": "Pendapatan",
+      "jumlah_kredit": 60000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "HPP - bawal",
+      "ref": "TR-HPP",
+      "akun_debit": "HPP",
+      "jumlah_debit": 50000,
+      "akun_kredit": "Persediaan",
+      "jumlah_kredit": 50000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "tr",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 30000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 30000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "tr",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 30000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 30000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Pengeluaran - pembelian_aset",
+      "ref": "TR",
+      "akun_debit": "Tanah",
+      "jumlah_debit": 2100000000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 2100000000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Pencatatan Kendaraan",
+      "ref": "AST-KENDARAAN",
+      "akun_debit": "kendaraan",
+      "jumlah_debit": 150000000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 150000000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "tr",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 30000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 30000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Pengeluaran - pembelian_aset",
+      "ref": "TR",
+      "akun_debit": "Beban Lainnya",
+      "jumlah_debit": 2100000000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 2100000000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "TR",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 300000,
+      "akun_kredit": "Utang",
+      "jumlah_kredit": 300000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "tr",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 30000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 30000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Pengeluaran - pembelian_aset",
+      "ref": "TR",
+      "akun_debit": "Tanah",
+      "jumlah_debit": 2100000000,
+      "akun_kredit": "Kas",
+      "jumlah_kredit": 2100000000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "beli",
+      "ref": "TR",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 300000,
+      "akun_kredit": "Utang",
+      "jumlah_kredit": 300000
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Akumulasi Utang Supplier",
+      "ref": "UTG-001",
+      "akun_debit": "Persediaan",
+      "jumlah_debit": 300000,
+      "akun_kredit": "Utang",
+      "jumlah_kredit": 300000
+    }
+  ],
+  "jurnal_penyesuaian": [
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Penyusutan kendaraan tahun ke-3",
+      "ref": "PST-KENDARAAN-3",
+      "akun_debit": "Beban Penyusutan Kendaraan",
+      "jumlah_debit": 30000000.0,
+      "akun_kredit": "Akumulasi Penyusutan Kendaraan",
+      "jumlah_kredit": 30000000.0
+    },
+    {
+      "tanggal": "2025-11-18",
+      "keterangan": "Penyusutan kendaraan tahun ke-3",
+      "ref": "PST-KENDARAAN-3",
+      "akun_debit": "Beban Penyusutan Kendaraan",
+      "jumlah_debit": 30000000.0,
+      "akun_kredit": "Akumulasi Penyusutan Kendaraan",
+      "jumlah_kredit": 30000000.0
+    }
+  ],
+  "buku_besar": {
+    "kas": [],
+    "pendapatan": [],
+    "persediaan": [],
+    "utang": [],
+    "hpp": [],
+    "pendapatan_tiket": [],
+    "tanah": [],
+    "bangunan_gazebo": [],
+    "kendaraan": [],
+    "peralatan": [],
+    "akumulasi_penyusutan_bangunan": [],
+    "akumulasi_penyusutan_kendaraan": [],
+    "akumulasi_penyusutan_peralatan": [],
+    "beban_gaji": [],
+    "beban_listrik": [],
+    "beban_penyusutan_bangunan": [],
+    "beban_penyusutan_kendaraan": [],
+    "beban_penyusutan_peralatan": [],
+    "beban_lainnya": []
+  },
+  "buku_besar_pembantu": {
+    "harni": [
+      {
+        "tanggal": "2025-11-18",
+        "keterangan": "pembelian_persediaan - beli",
+        "debit": 0,
+        "kredit": 300000,
+        "saldo": 300000
+      }
+    ]
+  },
+  "kartu_persediaan": [
+    {
+      "tanggal": "2025-11-18",
+      "kode_barang": "IK001",
+      "nama_barang": "Ikan Bawal Segar",
+      "masuk_qty": 0,
+      "masuk_harga": 0,
+      "masuk_total": 0,
+      "keluar_qty": 5,
+      "keluar_harga": 10000,
+      "keluar_total": 50000,
+      "saldo_qty": -5,
+      "saldo_harga": 10000,
+      "saldo_total": -50000,
+      "keterangan": "Penjualan - bawal"
+    },
+    {
+      "tanggal": "2025-11-18",
+      "kode_barang": "IK001",
+      "nama_barang": "Ikan Bawal Segar",
+      "masuk_qty": 200,
+      "masuk_harga": 150.0,
+      "masuk_total": 30000,
+      "keluar_qty": 0,
+      "keluar_harga": 0,
+      "keluar_total": 0,
+      "saldo_qty": 200,
+      "saldo_harga": 150.0,
+      "saldo_total": 30000,
+      "keterangan": "Pembelian - beli"
+    },
+    {
+      "tanggal": "2025-11-18",
+      "kode_barang": "IK001",
+      "nama_barang": "Ikan Bawal Segar",
+      "masuk_qty": 100,
+      "masuk_harga": 3000.0,
+      "masuk_total": 300000,
+      "keluar_qty": 0,
+      "keluar_harga": 0,
+      "keluar_total": 0,
+      "saldo_qty": 100,
+      "saldo_harga": 3000.0,
+      "saldo_total": 300000,
+      "keterangan": "Pembelian - beli"
+    }
+  ],
+  "suppliers": [
+    "harni"
+  ],
+  "aset_tetap": {
+    "tanah": {
+      "nilai_awal": 2100000000,
+      "penyusutan": 0,
+      "masa_manfaat": 0,
+      "tahun_pembelian": 2025
+    },
+    "bangunan_gazebo": {
+      "nilai_awal": 0,
+      "penyusutan": 0,
+      "masa_manfaat": 10,
+      "tahun_pembelian": 2025
+    },
+    "kendaraan": {
+      "nilai_awal": 150000000,
+      "penyusutan": 60000000.0,
+      "masa_manfaat": 5,
+      "tahun_pembelian": 2021
+    },
+    "peralatan": {
+      "nilai_awal": 0,
+      "penyusutan": 0,
+      "masa_manfaat": 3,
+      "tahun_pembelian": 2025
+    }
+  }
+}

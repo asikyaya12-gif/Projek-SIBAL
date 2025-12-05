@@ -1,0 +1,8 @@
+cd 'C:\Users\ilham\Downloads\Projek-SIBAL-main\Projek-SIBAL-main'
+python -m venv .venv
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install authlib
+pip freeze > requirements.txt
+python sibal.py
