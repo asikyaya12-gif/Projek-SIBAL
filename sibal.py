@@ -3,8 +3,47 @@ import dash
 import pandas as pd
 from datetime import datetime, timedelta
 import json
+import random
 from supabase import create_client, Client
 import os
+import glob
+
+# Try to load environment variables from a .env file if python-dotenv is installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("🔒 Loaded environment from .env (if present)")
+except Exception:
+    # dotenv not installed or no .env file; continue
+    pass
+
+
+def _load_google_credentials_from_local_file():
+    """Attempt to read local client_secret JSON files often downloaded from Google Console.
+
+    Looks for files named `client_secret*.json` or `client_secret.json` and extracts
+    client_id and client_secret if present. Returns tuple (client_id, client_secret).
+    """
+    files = glob.glob('client_secret*.json') + glob.glob('client_secret.json')
+    for path in files:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                payload = json.load(f)
+                # file may contain 'installed' or 'web'
+                for key in ('installed', 'web'):
+                    if key in payload:
+                        info = payload[key]
+                        cid = info.get('client_id')
+                        secret = info.get('client_secret')
+                        if cid and secret:
+                            print(f"🔐 Loaded Google credentials from {path} (local file)")
+                            return cid, secret
+                # fallback try top-level keys
+                if 'client_id' in payload and 'client_secret' in payload:
+                    return payload['client_id'], payload['client_secret']
+        except Exception:
+            continue
+    return None, None
 from flask import Flask, redirect, url_for, session
 from supabase import create_client, Client
 import os
@@ -22,6 +61,14 @@ server = app.server
 import secrets
 SECRET_KEY = os.getenv('SECRET_KEY', 'sibal-secure-' + secrets.token_hex(32))
 server.config['SECRET_KEY'] = SECRET_KEY
+# Ensure session cookie settings are explicit for local development
+# Use Lax so top-level navigations (OAuth redirects) will include the cookie
+server.config['SESSION_COOKIE_SAMESITE'] = os.getenv('SESSION_COOKIE_SAMESITE', 'Lax')
+# For local development over HTTP, do not force Secure; in production set to True
+server.config['SESSION_COOKIE_SECURE'] = False
+server.config['SESSION_COOKIE_HTTPONLY'] = True
+from datetime import timedelta as _td
+server.config['PERMANENT_SESSION_LIFETIME'] = _td(days=7)
 
 # 4. Setup Supabase client
 supabase_url = "https://shltrwcweexbdcuogscs.supabase.co"
@@ -32,6 +79,7 @@ supabase_client = create_client(supabase_url, supabase_key)
 import requests
 import secrets
 import hashlib
+import random
 
 class SimpleUser:
     def __init__(self, user_data=None):
@@ -70,6 +118,16 @@ def login_user(user, remember=False):
     current_user = SimpleUser(user)
     session['user_id'] = user['id']
     session['user_email'] = user['email']
+    # Set active user in data layer so data dipisah per akun
+    try:
+        sibal_data.set_active_user(user.get('id'))
+    except Exception:
+        pass
+    # make the session permanent so it survives short redirects
+    try:
+        session.permanent = True
+    except Exception:
+        pass
     print(f"✅ User logged in: {user['email']}")
 
 def authenticate_user(identifier, password):
@@ -116,6 +174,14 @@ def create_user(username, email, password):
         saved_user = sibal_data._insert_table_data('users', user_data)
         if saved_user:
             user_data['id'] = saved_user['id']
+            # Initialize per-user data from template (non-blocking)
+            try:
+                ok = sibal_data.initialize_user_from_template(user_data['id'])
+                if not ok:
+                    print(f"⚠️ Warning: failed to initialize template data for user {user_data['id']}")
+            except Exception as e:
+                print(f"⚠️ Exception during initializing template data: {e}")
+
             return user_data, "User created successfully"
         else:
             return None, "Gagal membuat user"
@@ -1272,19 +1338,23 @@ class SIBALData:
     
     def init_data_structures(self):
         """Initialize semua struktur data"""
-        # Data transaksi (sesuai tabel di Supabase)
-        self.transaksi_pemasukan = []
-        self.transaksi_pengeluaran = []
-        self.jurnal_umum = []
-        self.jurnal_penyesuaian = []
-        self.kartu_persediaan = []
+        # Data transaksi (semua pengguna)
+        self._all_transaksi_pemasukan = []
+        self._all_transaksi_pengeluaran = []
+        self._all_jurnal_umum = []
+        self._all_jurnal_penyesuaian = []
+        self._all_kartu_persediaan = []
+        # Active user id (digunakan untuk memfilter data per-akun)
+        self.active_user_id = None
         
         # Data master (untuk sementara di memory)
         self.master_persediaan = [
             {'kode': 'IK001', 'nama': 'Ikan Bawal Segar', 'satuan': 'kg', 'harga_beli': 25000, 'harga_jual': 35000}
         ]
         self.suppliers = []
-        self.buku_besar_pembantu = {}
+        # Per-user storage untuk suppliers dan buku_besar_pembantu
+        self._all_suppliers = {}
+        self._all_buku_besar_pembantu = {}
         
         # Data aset tetap
         self.aset_tetap = {
@@ -1354,12 +1424,12 @@ class SIBALData:
         print("🔄 Loading all data from Supabase...")
         
         try:
-            # Load data transaksi
-            self.transaksi_pemasukan = self._get_table_data('transaksi_pemasukan')
-            self.transaksi_pengeluaran = self._get_table_data('transaksi_pengeluaran')
-            self.jurnal_umum = self._get_table_data('jurnal_umum')
-            self.jurnal_penyesuaian = self._get_table_data('jurnal_penyesuaian')
-            self.kartu_persediaan = self._get_table_data('kartu_persediaan')
+            # Load data transaksi (simpan di storage global, akan difilter per user saat diakses)
+            self._all_transaksi_pemasukan = self._get_table_data('transaksi_pemasukan')
+            self._all_transaksi_pengeluaran = self._get_table_data('transaksi_pengeluaran')
+            self._all_jurnal_umum = self._get_table_data('jurnal_umum')
+            self._all_jurnal_penyesuaian = self._get_table_data('jurnal_penyesuaian')
+            self._all_kartu_persediaan = self._get_table_data('kartu_persediaan')
             
             # Load aset tetap
             assets_data = self._get_table_data('assets')
@@ -1373,11 +1443,83 @@ class SIBALData:
                     }
             
             print("✅ All data loaded successfully from Supabase")
-            print(f"📊 Statistics: {len(self.transaksi_pemasukan)} pemasukan, {len(self.transaksi_pengeluaran)} pengeluaran")
-            print(f"📊 Statistics: {len(self.jurnal_umum)} jurnal, {len(self.kartu_persediaan)} kartu persediaan")
+            print(f"📊 Statistics: {len(self._all_transaksi_pemasukan)} pemasukan, {len(self._all_transaksi_pengeluaran)} pengeluaran")
+            print(f"📊 Statistics: {len(self._all_jurnal_umum)} jurnal, {len(self._all_kartu_persediaan)} kartu persediaan")
             
         except Exception as e:
             print(f"❌ Error loading all data from Supabase: {e}")
+
+    # ------------------ User-scoped access helpers ------------------
+    def set_active_user(self, user_id):
+        """Set active user id untuk memfilter data yang ditampilkan/diakses."""
+        if user_id:
+            self.active_user_id = str(user_id)
+        else:
+            self.active_user_id = None
+
+    @property
+    def transaksi_pemasukan(self):
+        if not self.active_user_id:
+            return []
+        return [t for t in self._all_transaksi_pemasukan if str(t.get('user_id')) == str(self.active_user_id)]
+
+    @property
+    def transaksi_pengeluaran(self):
+        if not self.active_user_id:
+            return []
+        return [t for t in self._all_transaksi_pengeluaran if str(t.get('user_id')) == str(self.active_user_id)]
+
+    @property
+    def jurnal_umum(self):
+        if not self.active_user_id:
+            return []
+        return [j for j in self._all_jurnal_umum if str(j.get('user_id')) == str(self.active_user_id)]
+
+    @property
+    def jurnal_penyesuaian(self):
+        if not self.active_user_id:
+            return []
+        return [j for j in self._all_jurnal_penyesuaian if str(j.get('user_id')) == str(self.active_user_id)]
+
+    @property
+    def kartu_persediaan(self):
+        if not self.active_user_id:
+            return []
+        return [k for k in self._all_kartu_persediaan if str(k.get('user_id')) == str(self.active_user_id)]
+
+    # Suppliers dan buku besar pembantu per-user
+    @property
+    def suppliers(self):
+        uid = str(self.active_user_id) if self.active_user_id else None
+        if not uid:
+            return []
+        if uid not in self._all_suppliers:
+            self._all_suppliers[uid] = []
+        return self._all_suppliers[uid]
+
+    @suppliers.setter
+    def suppliers(self, value):
+        uid = str(self.active_user_id) if self.active_user_id else None
+        if not uid:
+            return
+        self._all_suppliers[uid] = value if isinstance(value, list) else list(value)
+
+    @property
+    def buku_besar_pembantu(self):
+        uid = str(self.active_user_id) if self.active_user_id else None
+        if not uid:
+            return {}
+        if uid not in self._all_buku_besar_pembantu:
+            self._all_buku_besar_pembantu[uid] = {}
+        return self._all_buku_besar_pembantu[uid]
+
+    @buku_besar_pembantu.setter
+    def buku_besar_pembantu(self, value):
+        uid = str(self.active_user_id) if self.active_user_id else None
+        if not uid:
+            return
+        self._all_buku_besar_pembantu[uid] = value if isinstance(value, dict) else dict(value)
+
 
     def save_data(self):
         """Menyimpan data ke Supabase - untuk backward compatibility"""
@@ -1388,8 +1530,8 @@ class SIBALData:
         try:
             print("💾 Saving all data to Supabase...")
             
-            # Simpan transaksi pemasukan
-            for trans in self.transaksi_pemasukan:
+            # Simpan transaksi pemasukan (semua storage, tapi sertakan user_id)
+            for trans in self._all_transaksi_pemasukan:
                 if 'id' not in trans:
                     data_to_save = {
                         'tanggal': trans['tanggal'],
@@ -1400,14 +1542,15 @@ class SIBALData:
                         'keterangan': trans.get('keterangan', ''),
                         'ref': trans.get('ref', ''),
                         'kode_akun_debit': trans.get('kode_akun_debit', ''),
-                        'kode_akun_kredit': trans.get('kode_akun_kredit', '')
+                        'kode_akun_kredit': trans.get('kode_akun_kredit', ''),
+                        'user_id': trans.get('user_id', self.active_user_id)
                     }
                     saved = self._insert_table_data('transaksi_pemasukan', data_to_save)
                     if saved:
                         trans['id'] = saved['id']
-            
+
             # Simpan transaksi pengeluaran
-            for trans in self.transaksi_pengeluaran:
+            for trans in self._all_transaksi_pengeluaran:
                 if 'id' not in trans:
                     data_to_save = {
                         'tanggal': trans['tanggal'],
@@ -1420,14 +1563,15 @@ class SIBALData:
                         'keterangan': trans.get('keterangan', ''),
                         'ref': trans.get('ref', ''),
                         'kode_akun_debit': trans.get('kode_akun_debit', ''),
-                        'kode_akun_kredit': trans.get('kode_akun_kredit', '')
+                        'kode_akun_kredit': trans.get('kode_akun_kredit', ''),
+                        'user_id': trans.get('user_id', self.active_user_id)
                     }
                     saved = self._insert_table_data('transaksi_pengeluaran', data_to_save)
                     if saved:
                         trans['id'] = saved['id']
-            
+
             # Simpan jurnal umum
-            for jurnal in self.jurnal_umum:
+            for jurnal in self._all_jurnal_umum:
                 if 'id' not in jurnal:
                     data_to_save = {
                         'tanggal': jurnal['tanggal'],
@@ -1438,14 +1582,15 @@ class SIBALData:
                         'jumlah_debit': float(jurnal['jumlah_debit']),
                         'akun_kredit': jurnal['akun_kredit'],
                         'kode_akun_kredit': jurnal['kode_akun_kredit'],
-                        'jumlah_kredit': float(jurnal['jumlah_kredit'])
+                        'jumlah_kredit': float(jurnal['jumlah_kredit']),
+                        'user_id': jurnal.get('user_id', self.active_user_id)
                     }
                     saved = self._insert_table_data('jurnal_umum', data_to_save)
                     if saved:
                         jurnal['id'] = saved['id']
-            
+
             # Simpan jurnal penyesuaian
-            for jurnal in self.jurnal_penyesuaian:
+            for jurnal in self._all_jurnal_penyesuaian:
                 if 'id' not in jurnal:
                     data_to_save = {
                         'tanggal': jurnal['tanggal'],
@@ -1456,14 +1601,15 @@ class SIBALData:
                         'jumlah_debit': float(jurnal['jumlah_debit']),
                         'akun_kredit': jurnal['akun_kredit'],
                         'kode_akun_kredit': jurnal['kode_akun_kredit'],
-                        'jumlah_kredit': float(jurnal['jumlah_kredit'])
+                        'jumlah_kredit': float(jurnal['jumlah_kredit']),
+                        'user_id': jurnal.get('user_id', self.active_user_id)
                     }
                     saved = self._insert_table_data('jurnal_penyesuaian', data_to_save)
                     if saved:
                         jurnal['id'] = saved['id']
-            
+
             # Simpan kartu persediaan
-            for item in self.kartu_persediaan:
+            for item in self._all_kartu_persediaan:
                 if 'id' not in item:
                     data_to_save = {
                         'tanggal': item['tanggal'],
@@ -1478,7 +1624,8 @@ class SIBALData:
                         'saldo_qty': int(item['saldo_qty']),
                         'saldo_harga': float(item['saldo_harga']),
                         'saldo_total': float(item['saldo_total']),
-                        'keterangan': item.get('keterangan', '')
+                        'keterangan': item.get('keterangan', ''),
+                        'user_id': item.get('user_id', self.active_user_id)
                     }
                     saved = self._insert_table_data('kartu_persediaan', data_to_save)
                     if saved:
@@ -1516,6 +1663,195 @@ class SIBALData:
             
         except Exception as e:
             print(f"❌ Error saving all data to Supabase: {e}")
+
+    def initialize_user_from_template(self, user_id, template_path='sibal_data.json'):
+        """Initialize a new user's data by copying from a local template JSON.
+
+        This will attach `user_id` to each record and save to Supabase and in-memory storage.
+        """
+        try:
+            if not os.path.exists(template_path):
+                print(f"⚠️ Template file not found: {template_path}")
+                return False
+
+            with open(template_path, 'r', encoding='utf-8') as f:
+                # file may have markdown fences in repo, try to load JSON content
+                content = f.read()
+                # strip possible ```json fences
+                content = content.strip()
+                if content.startswith('```'):
+                    # remove first and last fences
+                    parts = content.split('\n')
+                    # find first line that starts with ``` and remove it
+                    if parts[0].startswith('```'):
+                        parts = parts[1:]
+                    if parts and parts[-1].startswith('```'):
+                        parts = parts[:-1]
+                    content = '\n'.join(parts)
+
+                data = json.loads(content)
+
+            # Create deterministic random generator per user to make templates unique
+            uid = str(user_id)
+            seed = int(hashlib.sha256(uid.encode('utf-8')).hexdigest(), 16) % (2**32)
+            rng = random.Random(seed)
+
+            # per-user overall scale (makes differences more pronounced)
+            user_scale = 0.5 + rng.random() * 2.5  # range 0.5 .. 3.0
+
+            def unique_ref(orig_ref):
+                if not orig_ref:
+                    orig_ref = 'REF'
+                return f"{orig_ref}-{uid[:6]}-{rng.randint(100,999)}"
+
+            def jitter_number(value, pct=0.08, apply_scale=True):
+                try:
+                    v = float(value)
+                except Exception:
+                    return value
+                base = v * (user_scale if apply_scale else 1.0)
+                change = (rng.random() * 2 - 1) * pct
+                newv = base * (1 + change)
+                # round sensible for money/ints
+                if float(value).is_integer():
+                    return int(round(newv))
+                return float(round(newv, 2))
+
+            # Helper to insert list of records into table and in-memory _all_ list
+            def insert_list_unique(table_name, records, target_list_name):
+                if not records:
+                    return
+                # Shuffle and take a variable sample size so different users may get different subsets
+                recs = list(records)
+                rng.shuffle(recs)
+                sample_ratio = rng.uniform(0.5, 1.2)
+                sample_size = max(1, int(len(recs) * sample_ratio))
+                recs = recs[:sample_size]
+
+                # Optionally add a few synthetic variants per user
+                extra_copies = rng.randint(0, max(0, int(len(recs) * 0.3)))
+                for _ in range(extra_copies):
+                    pick = dict(rng.choice(records))
+                    recs.append(pick)
+
+                for rec in recs:
+                    rec = dict(rec)  # copy
+                    # Make some fields unique/per-user
+                    if 'ref' in rec:
+                        rec['ref'] = unique_ref(rec.get('ref'))
+                    # jitter numeric fields more strongly and apply user scale
+                    for num_field in ['jumlah', 'masuk_total', 'masuk_harga', 'keluar_total', 'saldo_total', 'jumlah_debit', 'jumlah_kredit', 'nilai_awal']:
+                        if num_field in rec:
+                            rec[num_field] = jitter_number(rec[num_field], pct=0.12)
+                    # jitter quantity fields
+                    for num_field in ['quantity', 'masuk_qty', 'keluar_qty', 'saldo_qty']:
+                        if num_field in rec:
+                            try:
+                                rec[num_field] = int(jitter_number(rec[num_field], pct=0.25))
+                            except Exception:
+                                pass
+                    # shift dates
+                    for k in list(rec.keys()):
+                        if 'tanggal' in k and isinstance(rec[k], str):
+                            try:
+                                dt = datetime.fromisoformat(rec[k])
+                                dt = dt + timedelta(days=rng.randint(-30, 30))
+                                rec[k] = dt.date().isoformat()
+                            except Exception:
+                                pass
+                    # supplier uniqueness
+                    if 'supplier' in rec and rec.get('supplier'):
+                        rec['supplier'] = f"{rec.get('supplier')}-{uid[-4:]}"
+                    rec['user_id'] = uid
+                    # Try to insert robustly: if DB rejects unknown column, remove it and retry
+                    saved = None
+                    if not self.client:
+                        saved = None
+                    else:
+                        attempts = 0
+                        data_to_try = dict(rec)
+                        while attempts < 5:
+                            try:
+                                resp = self.client.table(table_name).insert(data_to_try).execute()
+                                if resp and getattr(resp, 'data', None):
+                                    saved = resp.data[0]
+                                break
+                            except Exception as e:
+                                msg = str(e)
+                                import re
+                                m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", msg)
+                                if m:
+                                    col = m.group(1)
+                                    if col in data_to_try:
+                                        del data_to_try[col]
+                                        attempts += 1
+                                        continue
+                                # fallback: stop retrying
+                                break
+                    if saved:
+                        rec['id'] = saved.get('id')
+                    # Always append to in-memory storage so per-user view exists even if DB insert failed
+                    getattr(self, target_list_name).append(rec)
+
+            insert_list_unique('transaksi_pemasukan', data.get('transaksi_pemasukan', []), '_all_transaksi_pemasukan')
+            insert_list_unique('transaksi_pengeluaran', data.get('transaksi_pengeluaran', []), '_all_transaksi_pengeluaran')
+            insert_list_unique('jurnal_umum', data.get('jurnal_umum', []), '_all_jurnal_umum')
+            insert_list_unique('jurnal_penyesuaian', data.get('jurnal_penyesuaian', []), '_all_jurnal_penyesuaian')
+            insert_list_unique('kartu_persediaan', data.get('kartu_persediaan', []), '_all_kartu_persediaan')
+
+            # suppliers: store per-user list and append uid suffix so names are unique per user
+            sups = data.get('suppliers', [])
+            self._all_suppliers[uid] = [f"{s}_{uid[:6]}" for s in sups]
+
+            # buku_besar_pembantu: copy and prefix with user_id (and adapt supplier names)
+            bbp = data.get('buku_besar_pembantu', {})
+            self._all_buku_besar_pembantu[uid] = {}
+            for sup, items in bbp.items():
+                sup_uid = f"{sup}_{uid[:6]}"
+                self._all_buku_besar_pembantu[uid][sup_uid] = []
+                for item in items:
+                    item_copy = dict(item)
+                    item_copy['user_id'] = uid
+                    # jitter numeric fields in helper
+                    for num_field in ['debit', 'kredit', 'saldo']:
+                        if num_field in item_copy:
+                            item_copy[num_field] = jitter_number(item_copy[num_field])
+                    self._all_buku_besar_pembantu[uid][sup_uid].append(item_copy)
+
+            # aset_tetap: store under user context in assets table, jitter nilai_awal a bit
+            aset = data.get('aset_tetap', {})
+            for jenis, asetdata in aset.items():
+                asetdata_copy = dict(asetdata)
+                asetdata_copy['jenis_aset'] = jenis
+                # jitter nilai_awal
+                if 'nilai_awal' in asetdata_copy:
+                    asetdata_copy['nilai_awal'] = jitter_number(asetdata_copy['nilai_awal'], pct=0.15)
+                asetdata_copy['user_id'] = uid
+                # insert with same robust approach
+                if self.client:
+                    attempts = 0
+                    data_to_try = dict(asetdata_copy)
+                    while attempts < 5:
+                        try:
+                            resp = self.client.table('assets').insert(data_to_try).execute()
+                            break
+                        except Exception as e:
+                            msg = str(e)
+                            import re
+                            m = re.search(r"Could not find the '([a-zA-Z0-9_]+)' column", msg)
+                            if m:
+                                col = m.group(1)
+                                if col in data_to_try:
+                                    del data_to_try[col]
+                                    attempts += 1
+                                    continue
+                            break
+
+            print(f"✅ Initialized unique template data for user {user_id}")
+            return True
+        except Exception as e:
+            print(f"❌ Error initializing user from template: {e}")
+            return False
 
     def kurangi_persediaan(self, kode_barang, qty, tanggal, keterangan):
         """Mengurangi persediaan saat penjualan dengan metode FIFO"""
@@ -1576,7 +1912,8 @@ class SIBALData:
                 'keterangan': f'Penjualan - {keterangan}'
             }
             
-            self.kartu_persediaan.append(entri_persediaan)
+            entri_persediaan['user_id'] = self.active_user_id
+            self._all_kartu_persediaan.append(entri_persediaan)
             return True
             
         except Exception as e:
@@ -2439,10 +2776,26 @@ from authlib.integrations.flask_client import OAuth
 # Setup OAuth
 oauth = OAuth(server)
 
+# In-memory store for temporarily keeping oauth_user keyed by state.
+# This avoids losing the user data when browser cookies are restricted during OAuth redirects.
+OAUTH_STATE_STORE = {}
+
 # Konfigurasi Google OAuth - GANTI dengan credentials Anda
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
-# Debug: jangan tampilkan secret lengkap
+GOOGLE_REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI', 'http://localhost:8051/auth/callback')
+
+# If env vars missing, try local client_secret JSON files (untracked)
+if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+    cid, csec = _load_google_credentials_from_local_file()
+    if cid and csec:
+        GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID or cid
+        GOOGLE_CLIENT_SECRET = GOOGLE_CLIENT_SECRET or csec
+        # also set in environment so other parts can read it
+        os.environ.setdefault('GOOGLE_CLIENT_ID', GOOGLE_CLIENT_ID)
+        os.environ.setdefault('GOOGLE_CLIENT_SECRET', GOOGLE_CLIENT_SECRET)
+
+# Debug info (do not print secrets)
 print(f"🔐 Google Client ID set: {bool(GOOGLE_CLIENT_ID)}")
 print(f"🔐 Google Client Secret set: {bool(GOOGLE_CLIENT_SECRET)}")
 
@@ -2468,7 +2821,19 @@ def auth_login():
     try:
         # Generate state untuk security
         state = secrets.token_urlsafe(16)
+        # Store state in both session and in-memory store as a fallback
         session['oauth_state'] = state
+        # capture action from query param so callback can behave accordingly
+        try:
+            action = request.args.get('action')
+        except Exception:
+            action = None
+        OAUTH_STATE_STORE[state] = {'action': action}
+        try:
+            # Keep session persistent for the OAuth flow
+            session.permanent = True
+        except Exception:
+            pass
         
         # Build Google OAuth URL
         base_url = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -2495,10 +2860,23 @@ def auth_callback():
     """Handle callback dari Google OAuth - SELALU redirect ke complete profile"""
     try:
         print("🔵 Processing Google OAuth callback...")
+        # Dump session and args for debugging session persistence
+        try:
+            print("🔎 Session before processing:", dict(session))
+        except Exception:
+            print("🔎 Session not printable or empty")
+        try:
+            print("🔎 Callback args:", dict(request.args))
+        except Exception:
+            pass
         
-        # Verify state
+        # Verify state - allow if the state matches session or is present in the in-memory store
         state = request.args.get('state')
-        if state != session.get('oauth_state'):
+        sess_state = session.get('oauth_state')
+        if not state:
+            print("❌ Missing state parameter")
+            return redirect('/login?error=invalid_state')
+        if state != sess_state and state not in OAUTH_STATE_STORE:
             print("❌ Invalid state parameter")
             return redirect('/login?error=invalid_state')
         
@@ -2538,16 +2916,103 @@ def auth_callback():
         print(f"✅ User info received: {userinfo['email']}")
         
         # SELALU redirect ke complete profile, bahkan jika user sudah ada
-        session['oauth_user'] = {
+        oauth_user_obj = {
             'id': userinfo['sub'],
             'email': userinfo['email'],
             'name': userinfo.get('name', userinfo['email'].split('@')[0]),
             'picture': userinfo.get('picture', ''),
             'auth_provider': 'google'
         }
-        
-        print(f"🆕 Redirecting to complete profile: {userinfo['email']}")
-        return redirect('/complete-profile')
+
+        # Store oauth_user in the in-memory fallback store keyed by state
+        try:
+            if state in OAUTH_STATE_STORE and isinstance(OAUTH_STATE_STORE[state], dict):
+                OAUTH_STATE_STORE[state]['oauth_user'] = oauth_user_obj
+            else:
+                OAUTH_STATE_STORE[state] = {'action': None, 'oauth_user': oauth_user_obj}
+            print(f"🆕 Stored oauth_user in OAUTH_STATE_STORE for state {state}")
+        except Exception as e:
+            print(f"⚠️ Failed to store oauth_user in OAUTH_STATE_STORE: {e}")
+
+        # Also set in session if possible
+        try:
+            session['oauth_user'] = oauth_user_obj
+            session.permanent = True
+        except Exception:
+            pass
+
+        # Decide behavior based on action stored for this state ('signup' or 'login')
+        try:
+            stored = OAUTH_STATE_STORE.get(state, {}) if state else {}
+            action = stored.get('action') if isinstance(stored, dict) else None
+
+            users = sibal_data._get_table_data('users')
+            existing = next((u for u in users if u.get('email') == userinfo.get('email')), None)
+
+            if action == 'signup':
+                # create user if not exists, but DO NOT login automatically
+                if existing:
+                    print(f"🔁 User already exists for signup email: {existing.get('email')}")
+                else:
+                    uname = (userinfo.get('email') or '').split('@')[0]
+                    user_payload = {
+                        'email': userinfo.get('email'),
+                        'username': uname,
+                        'name': userinfo.get('name', uname),
+                        'auth_provider': 'google'
+                    }
+                    created = sibal_data._insert_table_data('users', user_payload)
+                    if created:
+                        print(f"✅ Created new user (signup) in DB for {created.get('email')}")
+                        try:
+                            sibal_data.initialize_user_from_template(created.get('id'))
+                        except Exception as e:
+                            print(f"⚠️ Failed to initialize template for new user: {e}")
+                    else:
+                        print("❌ Failed to create user record in DB during signup flow")
+
+                # cleanup and redirect to login page with flag
+                try:
+                    OAUTH_STATE_STORE.pop(state, None)
+                except Exception:
+                    pass
+                try:
+                    session.pop('oauth_user', None)
+                except Exception:
+                    pass
+                return redirect('/login?registered=google')
+
+            else:
+                # Default/login flow: if user exists, login; if not, redirect to complete-profile
+                if existing:
+                    try:
+                        login_user(existing, remember=True)
+                        try:
+                            OAUTH_STATE_STORE.pop(state, None)
+                        except Exception:
+                            pass
+                        try:
+                            session.pop('oauth_user', None)
+                        except Exception:
+                            pass
+                        print(f"🔐 Logged in user via Google: {existing.get('email')}")
+                        return redirect('/')
+                    except Exception as e:
+                        print(f"❌ Failed to login user after Google callback: {e}")
+                        return redirect('/login?error=login_failed')
+                else:
+                    # No existing user: require complete profile (username/password)
+                    print("ℹ️ No existing user for this Google account; redirecting to complete-profile to create account")
+                    # ensure oauth_user is in store for recovery
+                    if state and isinstance(OAUTH_STATE_STORE.get(state), dict):
+                        OAUTH_STATE_STORE[state]['oauth_user'] = oauth_user_obj
+                    return redirect(f'/complete-profile?state={state}')
+
+        except Exception as e:
+            print(f"❌ Error creating/fetching user after OAuth: {e}")
+            import traceback
+            traceback.print_exc()
+            return redirect('/login?error=callback_failed')
             
     except Exception as e:
         print(f"❌ Callback error: {e}")
@@ -2560,6 +3025,11 @@ def auth_logout():
     """Logout user"""
     global current_user
     current_user = SimpleUser()
+    # Clear active user from data layer
+    try:
+        sibal_data.set_active_user(None)
+    except Exception:
+        pass
     session.clear()
     return redirect('/login')
 
@@ -2583,6 +3053,10 @@ app.layout = html.Div([
 )
 def display_page(pathname):
     print(f"🌐 Navigating to: {pathname}")
+    try:
+        print("🔎 Current session keys:", list(session.keys()))
+    except Exception:
+        pass
     
     # Update top navigation
     top_nav = create_top_navigation()
@@ -2592,6 +3066,21 @@ def display_page(pathname):
     
     # Handle complete-profile route
     if pathname == '/complete-profile':
+        # Try to recover oauth_user from query state first (fallback store), then session
+        try:
+            state = request.args.get('state')
+        except Exception:
+            state = None
+
+        if state and state in OAUTH_STATE_STORE:
+            # move oauth_user into session for the Dash rendering code
+            try:
+                session['oauth_user'] = OAUTH_STATE_STORE.pop(state)
+                session.permanent = True
+                print(f"🔁 Restored oauth_user from OAUTH_STATE_STORE for state {state}")
+            except Exception:
+                pass
+
         if session.get('oauth_user'):
             return top_nav, complete_profile_layout(), None
         else:
@@ -2703,7 +3192,7 @@ def handle_login(n_login, n_google, identifier, password):
         # Untuk Google OAuth, kita perlu redirect ke Flask route
         return html.Div([
             html.P("Mengarahkan ke Google...", style={'color': COLORS['info']}),
-            dcc.Location(id='google-redirect', href='/auth/login', refresh=True)
+            dcc.Location(id='google-redirect', href='/auth/login?action=login', refresh=True)
         ]), dash.no_update, dash.no_update
     
     return dash.no_update, dash.no_update, dash.no_update
@@ -2756,7 +3245,7 @@ def handle_signup(n_signup, n_google, username, email, password, confirm_passwor
         # Untuk Google OAuth, redirect ke Flask route
         return html.Div([
             html.P("Mengarahkan ke Google...", style={'color': COLORS['info']}),
-            dcc.Location(id='google-signup-redirect', href='/auth/login', refresh=True)
+            dcc.Location(id='google-signup-redirect', href='/auth/login?action=signup', refresh=True)
         ]), dash.no_update, dash.no_update, dash.no_update, dash.no_update
     
     return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
@@ -2846,8 +3335,9 @@ def tambah_pemasukan(n_clicks, tanggal, jenis, harga_jual, qty, hpp, keterangan,
             'kode_akun_kredit': kode_kredit
         }
         
-        # Simpan ke memory
-        sibal_data.transaksi_pemasukan.append(transaksi_baru)
+        # Simpan ke memory (scoped ke user)
+        transaksi_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_transaksi_pemasukan.append(transaksi_baru)
         
         # ✅ SIMPAN KE DATABASE
         try:
@@ -2917,8 +3407,9 @@ def tambah_pengeluaran(n_clicks, tanggal, jenis, kode_barang, hpp, qty, metode, 
             'kode_akun_kredit': kode_akun_kredit
         }
         
-        # Simpan ke memory
-        sibal_data.transaksi_pengeluaran.append(transaksi_baru)
+        # Simpan ke memory (scoped ke user)
+        transaksi_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_transaksi_pengeluaran.append(transaksi_baru)
         
         # ✅ SIMPAN KE DATABASE
         try:
@@ -3030,8 +3521,9 @@ def tambah_pengeluaran(n_clicks, tanggal, jenis, kode_barang, hpp, qty, metode, 
             'kode_akun_kredit': kode_akun_kredit
         }
         
-        # Simpan ke memory
-        sibal_data.transaksi_pengeluaran.append(transaksi_baru)
+        # Simpan ke memory (scoped ke user)
+        transaksi_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_transaksi_pengeluaran.append(transaksi_baru)
         
         # ✅ TAMBAHKAN KE BUKU BESAR PEMBANTU JIKA KREDIT
         if metode == 'kredit' and supplier:
@@ -3243,7 +3735,8 @@ def update_persediaan_pembelian(kode_barang, qty, harga, tanggal, keterangan, su
             'keterangan': f'Pembelian - {keterangan}' + (f' - {supplier}' if supplier else '')
         }
         
-        sibal_data.kartu_persediaan.append(entri_baru)
+        entri_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_kartu_persediaan.append(entri_baru)
         print(f"✅ BERHASIL: {kode_barang} +{qty}kg, Saldo: {saldo_qty_baru}kg @ Rp{saldo_harga_baru:,.0f}")
         return True
         
@@ -3305,7 +3798,8 @@ def update_persediaan_penjualan(kode_barang, qty, tanggal, keterangan):
             'keterangan': f'Penjualan - {keterangan}'
         }
         
-        sibal_data.kartu_persediaan.append(entri_baru)
+        entri_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_kartu_persediaan.append(entri_baru)
         print(f"✅ BERHASIL: {kode_barang} -{qty}kg, HPP: Rp{hpp_total:,}, Saldo: {saldo_qty_baru}kg")
         return True, hpp_total
         
@@ -3368,7 +3862,8 @@ def hitung_ulang_semua_saldo():
                 'keterangan': transaksi['keterangan']
             }
             
-            sibal_data.kartu_persediaan.append(entri_baru)
+            entri_baru['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+            sibal_data._all_kartu_persediaan.append(entri_baru)
             print(f"🔁 {kode_barang} Transaksi {i+1}: Saldo = {saldo_qty}kg @ Rp{saldo_harga:,.0f}")
     
     print("✅ SELESAI menghitung ulang semua saldo")
@@ -3536,7 +4031,8 @@ def akumulasi_ke_jurnal(n_pemasukan, n_pengeluaran, tanggal):
                     'kode_akun_kredit': KODE_AKUN['pendapatan_tiket']['kode'],
                     'jumlah_kredit': trans['jumlah']
                 }
-                sibal_data.jurnal_umum.append(jurnal)
+                jurnal['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+                sibal_data._all_jurnal_umum.append(jurnal)
                 jurnal_created.append(jurnal)
                 print(f"✅ Created jurnal for tiket masuk")
             # Dalam callback akumulasi_ke_jurnal, perbaiki bagian penjualan ikan:
@@ -3553,7 +4049,8 @@ def akumulasi_ke_jurnal(n_pemasukan, n_pengeluaran, tanggal):
                     'kode_akun_kredit': KODE_AKUN['pendapatan']['kode'],
                     'jumlah_kredit': trans['jumlah']
                 }
-                sibal_data.jurnal_umum.append(jurnal_penjualan)
+                jurnal_penjualan['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+                sibal_data._all_jurnal_umum.append(jurnal_penjualan)
                 jurnal_created.append(jurnal_penjualan)
                 print(f"✅ Created jurnal for penjualan")
                 
@@ -3582,7 +4079,8 @@ def akumulasi_ke_jurnal(n_pemasukan, n_pengeluaran, tanggal):
                             'kode_akun_kredit': KODE_AKUN['persediaan']['kode'],
                             'jumlah_kredit': total_hpp
                         }
-                        sibal_data.jurnal_umum.append(jurnal_hpp)
+                        jurnal_hpp['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+                        sibal_data._all_jurnal_umum.append(jurnal_hpp)
                         jurnal_created.append(jurnal_hpp)
                         print(f"✅ Created HPP jurnal: Rp {total_hpp:,}")
                     else:
@@ -3600,7 +4098,8 @@ def akumulasi_ke_jurnal(n_pemasukan, n_pengeluaran, tanggal):
                     'kode_akun_kredit': KODE_AKUN['modal']['kode'],
                     'jumlah_kredit': trans['jumlah']
                 }
-                sibal_data.jurnal_umum.append(jurnal)
+                jurnal['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+                sibal_data._all_jurnal_umum.append(jurnal)
                 jurnal_created.append(jurnal)
                 print(f"✅ Created jurnal for modal")
         
@@ -3659,7 +4158,8 @@ def akumulasi_ke_jurnal(n_pemasukan, n_pengeluaran, tanggal):
                 'jumlah_kredit': trans['jumlah']
             }
             
-            sibal_data.jurnal_umum.append(jurnal)
+            jurnal['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+            sibal_data._all_jurnal_umum.append(jurnal)
             jurnal_created.append(jurnal)
             print(f"✅ Created jurnal for {trans['jenis']}")
             
@@ -3737,7 +4237,8 @@ def akumulasi_pengeluaran_ke_jurnal(tanggal):
                 'kode_akun_kredit': akun_kredit,
                 'jumlah_kredit': jumlah
             }
-            sibal_data.jurnal_umum.append(entri_jurnal)
+            entri_jurnal['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+            sibal_data._all_jurnal_umum.append(entri_jurnal)
         
         sibal_data.save_data()
         return html.Div([
@@ -4130,7 +4631,8 @@ def bayar_utang_supplier(supplier, jumlah, tanggal, keterangan=""):
             'kode_akun_kredit': KODE_AKUN['kas']['kode'],
             'jumlah_kredit': jumlah
         }
-        sibal_data.jurnal_umum.append(jurnal_pembayaran)
+        jurnal_pembayaran['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_jurnal_umum.append(jurnal_pembayaran)
         
         print(f"✅ Pembayaran utang {supplier}: Rp{jumlah:,}, sisa: Rp{saldo_baru:,}")
         sibal_data.save_all_data()
@@ -4240,7 +4742,8 @@ def simpan_aset_tetap(n_clicks, jenis_aset, nilai_aset, tanggal_perolehan, masa_
             'kode_akun_kredit': KODE_AKUN['kas']['kode'],
             'jumlah_kredit': nilai_aset
         }
-        sibal_data.jurnal_umum.append(entri_jurnal)
+        entri_jurnal['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+        sibal_data._all_jurnal_umum.append(entri_jurnal)
         
         sibal_data.save_data()
         return '', '', ''
@@ -4390,7 +4893,8 @@ def hitung_penyusutan(n_clicks):
                     'jumlah_kredit': nilai_penyusutan
                 }
                 jurnal_penyesuaian_aset.append(jurnal_penyesuaian)
-                sibal_data.jurnal_penyesuaian.append(jurnal_penyesuaian)
+                jurnal_penyesuaian['user_id'] = current_user.get_id() if current_user and current_user.get_id() else None
+                sibal_data._all_jurnal_penyesuaian.append(jurnal_penyesuaian)
         
         sibal_data.save_data()
         
