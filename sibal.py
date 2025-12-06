@@ -174,14 +174,9 @@ def create_user(username, email, password):
         saved_user = sibal_data._insert_table_data('users', user_data)
         if saved_user:
             user_data['id'] = saved_user['id']
-            # Initialize per-user data from template (non-blocking)
-            try:
-                ok = sibal_data.initialize_user_from_template(user_data['id'])
-                if not ok:
-                    print(f"⚠️ Warning: failed to initialize template data for user {user_data['id']}")
-            except Exception as e:
-                print(f"⚠️ Exception during initializing template data: {e}")
-
+            # NOTE: do NOT initialize template data automatically.
+            # New users should start with EMPTY data per requested behavior.
+            print(f"ℹ️ New user created with id {user_data['id']} (no template initialization)")
             return user_data, "User created successfully"
         else:
             return None, "Gagal membuat user"
@@ -2964,10 +2959,7 @@ def auth_callback():
                     created = sibal_data._insert_table_data('users', user_payload)
                     if created:
                         print(f"✅ Created new user (signup) in DB for {created.get('email')}")
-                        try:
-                            sibal_data.initialize_user_from_template(created.get('id'))
-                        except Exception as e:
-                            print(f"⚠️ Failed to initialize template for new user: {e}")
+                        # Per-request: do NOT initialize template data on signup; leave data empty
                     else:
                         print("❌ Failed to create user record in DB during signup flow")
 
